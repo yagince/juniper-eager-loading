@@ -49,6 +49,7 @@ graphql_schema! {
     type City {
         id: Int!
         country: Country!
+        zipCode: ZipCode!
     }
 
     type Company {
@@ -364,6 +365,24 @@ mod models {
             Ok(cities)
         }
     }
+
+    impl juniper_eager_loading::LoadFrom<String> for ZipCode {
+        type Error = Box<dyn std::error::Error>;
+        type Context = super::Context;
+
+        fn load(codes: &[String], _: &(), ctx: &Self::Context) -> Result<Vec<Self>, Self::Error> {
+            let mut zip_codes = ctx
+                .db
+                .zip_codes
+                .all_values()
+                .into_iter()
+                .filter(|zip_code| codes.contains(&zip_code.code))
+                .cloned()
+                .collect::<Vec<_>>();
+            zip_codes.sort_by_key(|x| x.code.clone());
+            Ok(zip_codes)
+        }
+    }
 }
 
 pub struct Db {
@@ -638,6 +657,12 @@ pub struct City {
     city: models::City,
     #[has_one(foreign_key_field = country_id, root_model_field = country)]
     country: HasOne<Country>,
+    #[has_one(
+        foreign_key_field = zip_code,
+        primary_key_field = code,
+        root_model_field = zip_code,
+    )]
+    zip_code: HasOne<ZipCode>,
 }
 
 impl CityFields for City {
@@ -651,6 +676,14 @@ impl CityFields for City {
         _trail: &QueryTrail<'_, Country, Walked>,
     ) -> FieldResult<&Country> {
         Ok(self.country.try_unwrap()?)
+    }
+
+    fn field_zip_code(
+        &self,
+        _executor: &Executor<'_, Context>,
+        _trail: &QueryTrail<'_, ZipCode, Walked>,
+    ) -> FieldResult<&ZipCode> {
+        Ok(self.zip_code.try_unwrap()?)
     }
 }
 
@@ -880,6 +913,7 @@ fn loading_users_and_associations() {
     let mut countries = StatsHash::new("countries");
     let mut cities = StatsHash::new("cities");
     let mut users = StatsHash::new("users");
+    let mut zip_codes = StatsHash::new("zip_codes");
 
     let country = models::Country {
         id: CountryId::from(10),
@@ -890,16 +924,26 @@ fn loading_users_and_associations() {
     let city = models::City {
         id: CityId::from(20),
         country_id: country.id,
-        zip_code: Default::default(),
+        zip_code: "1234".into(),
     };
     cities.insert(city.id, city.clone());
 
     let other_city = models::City {
         id: CityId::from(30),
         country_id: country.id,
-        zip_code: Default::default(),
+        zip_code: "5678".into(),
     };
     cities.insert(other_city.id, other_city.clone());
+
+    let zip_code = models::ZipCode {
+        code: "1234".into(),
+    };
+    zip_codes.insert(zip_code.code.clone(), zip_code.clone());
+
+    let other_zip_code = models::ZipCode {
+        code: "5678".into(),
+    };
+    zip_codes.insert(other_zip_code.code.clone(), other_zip_code.clone());
 
     users.insert(
         UserId::from(1),
@@ -946,10 +990,10 @@ fn loading_users_and_associations() {
         users,
         countries,
         cities,
+        zip_codes,
         employments: StatsHash::new("employments"),
         companies: StatsHash::new("companies"),
         issues: StatsHash::new("issue"),
-        zip_codes: StatsHash::new("zip_codes"),
     };
 
     let (json, counts) = run_query(
@@ -957,7 +1001,12 @@ fn loading_users_and_associations() {
         query Test {
             users {
                 id
-                city { id }
+                city {
+                  id
+                  zipCode {
+                    code
+                  }
+                }
                 country {
                     id
                     cities {
@@ -975,7 +1024,12 @@ fn loading_users_and_associations() {
             "users": [
                 {
                     "id": 1,
-                    "city": { "id": *other_city.id },
+                    "city": {
+                        "id": *other_city.id,
+                        "zipCode": {
+                            "code": *other_zip_code.code,
+                        },
+                    },
                     "country": {
                         "id": *country.id,
                         "cities": [
@@ -987,11 +1041,21 @@ fn loading_users_and_associations() {
                 },
                 {
                     "id": 2,
-                    "city": { "id": *city.id }
+                    "city": {
+                        "id": *city.id,
+                        "zipCode": {
+                            "code": *zip_code.code,
+                        },
+                    }
                 },
                 {
                     "id": 3,
-                    "city": { "id": *city.id }
+                    "city": {
+                        "id": *city.id,
+                        "zipCode": {
+                            "code": *zip_code.code,
+                        },
+                    }
                 },
                 {
                     "id": 4,

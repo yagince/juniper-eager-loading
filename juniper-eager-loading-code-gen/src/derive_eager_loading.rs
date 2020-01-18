@@ -337,9 +337,10 @@ impl DeriveData {
         let is_child_of_impl = match &data.args {
             FieldArgs::HasOne(has_one) => {
                 let field_root_model_field = has_one.root_model_field(field_name);
+                let field_root_model_id_field = has_one.primary_key_field();
 
                 quote! {
-                    node.#root_model_field.#foreign_key_field == child.#field_root_model_field.id
+                    node.#root_model_field.#foreign_key_field == child.#field_root_model_field.#field_root_model_id_field
                 }
             }
             FieldArgs::OptionHasOne(option_has_one) => {

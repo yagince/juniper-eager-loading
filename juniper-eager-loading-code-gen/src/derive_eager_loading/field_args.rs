@@ -75,10 +75,21 @@ pub struct HasOne {
     print: Option<()>,
     skip: Option<()>,
     foreign_key_field: Option<syn::Ident>,
+    primary_key_field: Option<syn::Ident>,
     root_model_field: Option<syn::Ident>,
     graphql_field: Option<syn::Ident>,
     default: Option<()>,
     field_arguments: Option<syn::TypePath>,
+}
+
+impl HasOne {
+    pub fn primary_key_field(&self) -> TokenStream {
+        if let Some(inner) = &self.primary_key_field {
+            quote! { #inner }
+        } else {
+            quote!{ id }
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromAttributes)]
