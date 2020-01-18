@@ -350,16 +350,17 @@ impl DeriveData {
                 }
             }
             FieldArgs::HasMany(has_many) => {
+                let root_model_id_field = self.id_field();
                 let field_root_model_field = has_many.root_model_field(field_name);
 
                 if has_many.foreign_key_optional.is_some() {
                     quote! {
-                        Some(node.#root_model_field.id) ==
+                        Some(node.#root_model_field.#root_model_id_field) ==
                             child.#field_root_model_field.#foreign_key_field
                     }
                 } else {
                     quote! {
-                        node.#root_model_field.id ==
+                        node.#root_model_field.#root_model_id_field ==
                             child.#field_root_model_field.#foreign_key_field
                     }
                 }
@@ -473,6 +474,10 @@ impl DeriveData {
 
     fn id(&self) -> TokenStream {
         self.args.id()
+    }
+
+    fn id_field(&self) -> TokenStream {
+        self.args.id_field()
     }
 
     fn context(&self) -> TokenStream {

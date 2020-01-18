@@ -23,6 +23,7 @@ graphql_schema! {
     type Query {
       user(id: Int!): User! @juniper(ownership: "owned")
       users: [User!]! @juniper(ownership: "owned")
+      zipCodes: [ZipCode!]! @juniper(ownership: "owned")
     }
 
     type Mutation {
@@ -65,6 +66,12 @@ graphql_schema! {
         id: Int!
         title: String!
         reviewer: User
+    }
+
+    // When primary key is not `id`
+    type ZipCode {
+        code: String!
+        cities: [City!]!
     }
 }
 
@@ -110,6 +117,7 @@ mod models {
     pub struct City {
         pub id: CityId,
         pub country_id: CountryId,
+        pub zip_code: String,
     }
 
     #[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
@@ -137,6 +145,11 @@ mod models {
         pub id: IssueId,
         pub title: String,
         pub reviewer_id: Option<UserId>,
+    }
+
+    #[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
+    pub struct ZipCode {
+        pub code: String,
     }
 
     impl juniper_eager_loading::LoadFrom<CountryId> for Country {
@@ -332,6 +345,25 @@ mod models {
             Ok(issues)
         }
     }
+
+    impl juniper_eager_loading::LoadFrom<ZipCode> for City {
+        type Error = Box<dyn std::error::Error>;
+        type Context = super::Context;
+
+        fn load(zip_codes: &[ZipCode], _: &(), ctx: &Self::Context) -> Result<Vec<Self>, Self::Error> {
+            let codes = zip_codes.iter().map(|x| x.code.clone()).collect::<Vec<_>>();
+            let mut cities = ctx
+                .db
+                .cities
+                .all_values()
+                .into_iter()
+                .filter(|city| codes.contains(&city.zip_code))
+                .cloned()
+                .collect::<Vec<_>>();
+            cities.sort_by_key(|x| x.id);
+            Ok(cities)
+        }
+    }
 }
 
 pub struct Db {
@@ -341,6 +373,7 @@ pub struct Db {
     companies: StatsHash<CompanyId, models::Company>,
     employments: StatsHash<EmploymentId, models::Employment>,
     issues: StatsHash<IssueId, models::Issue>,
+    zip_codes: StatsHash<String, models::ZipCode>,
 }
 
 pub struct Context {
@@ -391,6 +424,28 @@ impl QueryFields for Query {
         User::eager_load_all_children_for_each(&mut users, &user_models, ctx, trail)?;
 
         Ok(users)
+    }
+
+    fn field_zip_codes<'a>(
+        &self,
+        executor: &Executor<'a, Context>,
+        trail: &QueryTrail<'a, ZipCode, Walked>,
+    ) -> FieldResult<Vec<ZipCode>> {
+        let ctx = executor.context();
+
+        let mut zip_code_models = ctx
+            .db
+            .zip_codes
+            .all_values()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        zip_code_models.sort_by_key(|x| x.code.clone());
+
+        let mut zip_codes = ZipCode::from_db_models(&zip_code_models);
+        ZipCode::eager_load_all_children_for_each(&mut zip_codes, &zip_code_models, ctx, trail)?;
+
+        Ok(zip_codes)
     }
 }
 
@@ -673,6 +728,32 @@ impl IssueFields for Issue {
     }
 }
 
+#[derive(Clone, Eq, PartialEq, Debug, Ord, PartialOrd, EagerLoading)]
+#[eager_loading(
+    context = Context,
+    error = Box<dyn std::error::Error>,
+    id_field = code,
+)]
+pub struct ZipCode {
+    zip_code: models::ZipCode,
+    #[has_many(root_model_field = city, foreign_key_field = zip_code)]
+    cities: HasMany<City>,
+}
+
+impl ZipCodeFields for ZipCode {
+    fn field_code(&self, _executor: &Executor<'_, Context>) -> FieldResult<&String> {
+        Ok(&self.zip_code.code)
+    }
+
+    fn field_cities(
+        &self,
+        _executor: &Executor<'_, Context>,
+        _trail: &QueryTrail<'_, City, Walked>,
+    ) -> FieldResult<&Vec<City>> {
+        Ok(self.cities.try_unwrap()?)
+    }
+}
+
 #[test]
 fn loading_user() {
     let mut countries = StatsHash::new("countries");
@@ -687,6 +768,7 @@ fn loading_user() {
     let other_city = models::City {
         id: CityId::from(30),
         country_id,
+        zip_code: Default::default(),
     };
 
     countries.insert(country_id, country);
@@ -715,6 +797,7 @@ fn loading_user() {
         employments: StatsHash::new("employments"),
         companies: StatsHash::new("companies"),
         issues: StatsHash::new("issues"),
+        zip_codes: StatsHash::new("zip_codes"),
     };
     let (json, counts) = run_query("query Test { user(id: 1) { id } }", db);
 
@@ -744,6 +827,7 @@ fn loading_users() {
     let other_city = models::City {
         id: CityId::from(30),
         country_id,
+        zip_code: Default::default(),
     };
 
     countries.insert(country_id, country);
@@ -772,6 +856,7 @@ fn loading_users() {
         employments: StatsHash::new("employments"),
         companies: StatsHash::new("companies"),
         issues: StatsHash::new("issues"),
+        zip_codes: StatsHash::new("zip_codes"),
     };
     let (json, counts) = run_query("query Test { users { id } }", db);
 
@@ -805,12 +890,14 @@ fn loading_users_and_associations() {
     let city = models::City {
         id: CityId::from(20),
         country_id: country.id,
+        zip_code: Default::default(),
     };
     cities.insert(city.id, city.clone());
 
     let other_city = models::City {
         id: CityId::from(30),
         country_id: country.id,
+        zip_code: Default::default(),
     };
     cities.insert(other_city.id, other_city.clone());
 
@@ -862,6 +949,7 @@ fn loading_users_and_associations() {
         employments: StatsHash::new("employments"),
         companies: StatsHash::new("companies"),
         issues: StatsHash::new("issue"),
+        zip_codes: StatsHash::new("zip_codes"),
     };
 
     let (json, counts) = run_query(
@@ -942,6 +1030,7 @@ fn test_caching() {
     let city = models::City {
         id: CityId::from(2),
         country_id: country.id,
+        zip_code: Default::default(),
     };
 
     let user = models::User {
@@ -961,6 +1050,7 @@ fn test_caching() {
         employments: StatsHash::new("employments"),
         companies: StatsHash::new("companies"),
         issues: StatsHash::new("issues"),
+        zip_codes: StatsHash::new("zip_codes"),
     };
 
     let (json, counts) = run_query(
@@ -1069,6 +1159,7 @@ fn test_loading_has_many_through() {
         employments,
         users,
         issues: StatsHash::new("issues"),
+        zip_codes: StatsHash::new("zip_codes"),
     };
 
     let (json, counts) = run_query(
@@ -1164,6 +1255,7 @@ fn test_loading_has_many_fk_optional() {
         employments: StatsHash::new("employments"),
         users,
         issues,
+        zip_codes: StatsHash::new("zip_codes"),
     };
 
     let (json, _counts) = run_query(
@@ -1199,12 +1291,110 @@ fn test_loading_has_many_fk_optional() {
     );
 }
 
+#[test]
+fn test_loading_has_many_not_id() {
+    let mut cities = StatsHash::new("cities");
+
+    let mut country = models::Country {
+        id: CountryId::from(1),
+    };
+
+    let city_1 = models::City {
+        id: CityId::from(20),
+        country_id: country.id,
+        zip_code: "1234".into(),
+    };
+    cities.insert(city_1.id, city_1.clone());
+
+    let city_2 = models::City {
+        id: CityId::from(30),
+        country_id: country.id,
+        zip_code: "1234".into(),
+    };
+    cities.insert(city_2.id, city_2.clone());
+
+    let city_3 = models::City {
+        id: CityId::from(40),
+        country_id: country.id,
+        zip_code: "5678".into(),
+    };
+    cities.insert(city_3.id, city_3.clone());
+
+    let mut zip_codes = StatsHash::new("zip_codes");
+
+    let zip_code_1 = models::ZipCode {
+        code: "1234".into(),
+    };
+    zip_codes.insert(zip_code_1.code.clone(), zip_code_1.clone());
+
+    let zip_code_2 = models::ZipCode {
+        code: "5678".into(),
+    };
+    zip_codes.insert(zip_code_2.code.clone(), zip_code_2.clone());
+
+    let zip_code_3 = models::ZipCode {
+        code: "9012".into(),
+    };
+    zip_codes.insert(zip_code_3.code.clone(), zip_code_3.clone());
+
+
+    let db = Db {
+        companies: StatsHash::new("companies"),
+        countries: StatsHash::new("countries"),
+        employments: StatsHash::new("employments"),
+        users: StatsHash::new("users"),
+        issues: StatsHash::new("issues"),
+        cities,
+        zip_codes,
+    };
+
+    let (json, _counts) = run_query(
+        r#"
+        query Test {
+            zipCodes {
+                code
+                cities {
+                    id
+                }
+            }
+        }
+    "#,
+        db,
+    );
+
+    assert_json_include!(
+        expected: json!({
+            "zipCodes": [
+                {
+                    "code": "1234",
+                    "cities": [
+                        { "id": *city_1.id },
+                        { "id": *city_2.id },
+                    ]
+                },
+                {
+                    "code": "5678",
+                    "cities": [
+                        { "id": *city_3.id },
+                    ]
+                },
+                {
+                    "code": "9012",
+                    "cities": []
+                },
+            ],
+        }),
+        actual: json,
+    );
+}
+
 struct DbStats {
     user_reads: usize,
     country_reads: usize,
     city_reads: usize,
     company_reads: usize,
     employment_reads: usize,
+    zip_code_reads: usize,
 }
 
 fn run_query(query: &str, db: Db) -> (Value, DbStats) {
@@ -1238,6 +1428,7 @@ fn run_query(query: &str, db: Db) -> (Value, DbStats) {
             city_reads: ctx.db.cities.reads_count(),
             company_reads: ctx.db.companies.reads_count(),
             employment_reads: ctx.db.employments.reads_count(),
+            zip_code_reads: ctx.db.zip_codes.reads_count(),
         },
     )
 }

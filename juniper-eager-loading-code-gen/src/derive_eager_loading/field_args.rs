@@ -19,6 +19,7 @@ macro_rules! token_stream_getter {
 pub struct EagerLoading {
     model: Option<syn::Type>,
     id: Option<syn::Type>,
+    id_field: Option<syn::Ident>,
     context: syn::Type,
     error: syn::Type,
     root_model_field: Option<syn::Ident>,
@@ -43,6 +44,14 @@ impl EagerLoading {
             quote! { #inner }
         } else {
             quote! { i32 }
+        }
+    }
+
+    pub fn id_field(&self) -> TokenStream {
+        if let Some(inner) = &self.id_field {
+            quote! { #inner }
+        } else {
+            quote! { id }
         }
     }
 
